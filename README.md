@@ -54,7 +54,9 @@ Process-group containment is cooperative. Descendants can escape cleanup by join
 
 ## Lifecycle limits
 
-Cleanup through `Drop` only runs when Rust destructors execute. It does not run when the owning process is terminated by `SIGKILL`, calls `abort`, or exits through another path that bypasses unwinding. Applications should handle ordinary termination signals and return through normal control flow. Surviving abrupt parent death requires an independent watchdog process.
+Cleanup through `Drop` only runs when Rust destructors execute. It does not run when the owning process is terminated by `SIGKILL`, calls `abort`, or exits through another path that bypasses unwinding. Applications should handle ordinary termination signals and return through normal control flow.
+
+On Linux, import `process_guard::CommandExt` and call `command.parent_death_signal(Signal::SIGQUIT)` before spawning to request a kernel-delivered signal on parent death. This tracks the spawning thread, not the entire parent process. It is opt-in and independent of the guard's shutdown policy.
 
 ## Platform support
 

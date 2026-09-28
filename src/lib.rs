@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-use std::{io, os::unix::process::CommandExt, process, thread, time};
+use std::{io, os::unix::process::CommandExt as UnixCommandExt, process, thread, time};
 
 /// Retries an I/O operation if it returns with `EINTR`.
 #[inline]
@@ -31,6 +31,37 @@ fn poll_delay(timeout: time::Duration, elapsed: time::Duration) -> Option<time::
 
 /// Signal that can be sent to a guarded process.
 pub type Signal = nix::sys::signal::Signal;
+
+/// Extends commands with Linux parent-death signalling.
+#[cfg(target_os = "linux")]
+pub trait CommandExt {
+    /// Requests a signal when the parent dies.
+    ///
+    /// **Tracks the spawning thread, not the whole parent process.**
+    /// Setup errors or a changed parent PID fail spawning.
+    fn parent_death_signal(&mut self, signal: Signal) -> &mut Self;
+}
+
+#[cfg(target_os = "linux")]
+impl CommandExt for process::Command {
+    fn parent_death_signal(&mut self, signal: Signal) -> &mut Self {
+        let parent = nix::unistd::getpid();
+        // SAFETY: The hook only calls async-signal-safe operations and never allocates.
+        unsafe { self.pre_exec(move || arm_parent_death_signal(signal, parent)) }
+    }
+}
+
+/// Arms the signal in the child and checks for parent death before registration.
+#[cfg(target_os = "linux")]
+fn arm_parent_death_signal(signal: Signal, parent: nix::unistd::Pid) -> io::Result<()> {
+    nix::sys::prctl::set_pdeathsig(signal).map_err(io::Error::from)?;
+    if nix::unistd::getppid() != parent {
+        return Err(io::Error::from_raw_os_error(
+            nix::errno::Errno::ESRCH as i32,
+        ));
+    }
+    Ok(())
+}
 
 /// Configures how a guarded process is shut down.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -470,6 +501,9 @@ impl Drop for ProcessGuard {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod parent_death_tests;
 
 #[cfg(test)]
 mod tests {
